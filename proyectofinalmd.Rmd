@@ -1,0 +1,89 @@
+---
+title: "proyectofinalv1"
+author: "Andres Buitrago & Jorge Gallego"
+date: "24/10/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(ggplot2)
+library(class)
+library(ggthemes)
+library(gridExtra)
+#library(remotes)
+#install_version("ElemStatLearn")
+```
+
+## Clasificación pago TC
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r}
+data <- read.csv("dataset.csv")
+
+colnames(data) <- tolower(colnames(data))
+
+str(data)
+```
+```{r}
+data$target = as.factor(data$target)
+summary(data)
+```
+
+```{r formatovariables}
+data$ha_tenido_credito_de_consumo    = as.factor(data$ha_tenido_credito_de_consumo   )
+data$ha_tenido_credito_de_materiales = as.factor(data$ha_tenido_credito_de_materiales)
+data$ha_tenido_credito_auto          = as.factor(data$ha_tenido_credito_auto         )
+data$ha_tenido_tdc                   = as.factor(data$ha_tenido_tdc                  )
+data$tiene_cuenta_cobranza           = as.factor(data$tiene_cuenta_cobranza          )
+data$tiene_cuenta_banco_xyz          = as.factor(data$tiene_cuenta_banco_xyz         )
+data$tiene_cuenta_otro_banco         = as.factor(data$tiene_cuenta_otro_banco        )
+data$tiene_cuenta_revolvente         = as.factor(data$tiene_cuenta_revolvente        )
+data$tiene_saldo_vencido             = as.factor(data$tiene_saldo_vencido            )
+data$tiempo_vida_crediticia          = as.factor(data$tiempo_vida_crediticia         )
+str(data)
+
+```
+```{r}
+vars <- colnames(data)
+numericVars <- vars[sapply(data[,vars], class) %in% c('numeric','integer')]
+categoricalVars <- setdiff(colnames(data), numericVars)
+for (catVar in numericVars){
+  if(catVar != 'target') {
+    print(
+      ggplot(data, aes_string(x=catVar)) + geom_density(aes(group=target, colour=target, fill=target), alpha=0.3)
+    )
+  }
+}
+```
+```{r outliers}
+vars = colnames(data)
+numericVars = vars[sapply(data[,vars], class) %in% c('numeric','integer')]
+categoricalVars = setdiff(colnames(data), numericVars)
+for (catvar in numericVars){
+  if(catVar != 'target') {
+    g1=ggplot(data, aes_string(y=catvar))+
+      geom_boxplot(fill="orange1")+
+      coord_flip()+
+      labs(y="")+
+      theme_base()+
+      theme(axis.text.y=element_blank(),axis.ticks.y=element_blank())
+    #histogram:
+    g2=ggplot(data, aes_string(x=catvar))+
+      labs(x=catvar)+
+      geom_histogram(color="black", fill="orange")+
+      theme_base()+
+      theme(axis.title.y=element_blank(),axis.text.y=element_blank(),axis.ticks.y=element_blank())
+    print( grid.arrange(g1,g2) )
+  }
+}
+```
+
+```{r}
+logReg1 <- glm(target ~ ., data=data, family="binomial")
+```
+
+

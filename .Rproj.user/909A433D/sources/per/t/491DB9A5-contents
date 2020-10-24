@@ -1,0 +1,273 @@
+---
+title: Telco churn
+author: Lina Marcela Quintero - Felipe Clement Santacruz
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+---
+
+```{r libraries, include=FALSE}
+library(tidyverse)
+library(caret)
+library(doParallel)
+```
+
+# Carga de datos
+
+```{r load}
+data_raw <- read.csv("data.csv")
+
+colnames(data_raw) <- tolower(colnames(data_raw))
+
+str(data_raw)
+```
+
+# Pregunta 1.1 - Exploracion de datos {.tabset}
+
+Se revisa cada columna con el proposito de encontrar anomalias. Un resumen inicial es:
+
+```{r summary}
+summary(data_raw)
+```
+
+No se encuentran `NA` o valores fuera de rango (negativos, ilogicos). Se procede a explorar la distribucion de todas las columnas y se encuentra que las variables con mayor poder predictivo son `SOBRECARGO` y `SATISFACCION`; no existen anomalias en los datos.
+
+## Estado
+
+```{r estado}
+data.frame(
+  retirados = nrow(data_raw[(data_raw$estado == "RETIRADO"), ]) / nrow(data_raw),
+  vinculados = nrow(data_raw[(data_raw$estado == "VINCULADO"), ]) / nrow(data_raw)
+)
+```
+
+La distribucion de personas retiradas y vinculadas es casi igual, con el 50.36% de clientes retirados y el 49.63% vinculados.
+
+## Ingresos
+
+```{r ingresos}
+ggplot(data_raw) + geom_density(aes(ingresos, group = estado, fill = estado, alpha = I(0.5)))
+```
+
+Esta variable parece segregar los clientes en 3 grupos diferentes.
+
+## Casa
+
+```{r casa}
+ggplot(data_raw) + geom_density(aes(casa, group = estado, fill = estado, alpha = I(0.5)))
+```
+
+## Precio dispositivo
+
+```{r precio_dispositivo}
+ggplot(data_raw) + geom_density(aes(precio_dispositivo, group = estado, fill = estado, alpha = I(0.5)))
+```
+
+Parece que los datos tambien presentan 2 subconjuntos de clientes.
+
+## Meses
+
+```{r meses}
+ggplot(data_raw) + geom_density(aes(meses, group = estado, fill = estado, alpha = I(0.5)))
+```
+
+La mayoria de los clientes tienen una duracion mayor a 4 meses. No parece que hay correlacion entre el estado y los meses, es decir, los clientes que se van se quedan el mismo tiempo que los que se van.
+
+## Duracion
+
+```{r duracion}
+ggplot(data_raw) + geom_density(aes(duracion, group = estado, fill = estado, alpha = I(0.5)))
+```
+
+Esta variable logra dividir los clientes en dos grupos casi perfectamente.
+
+## Sobrecargo
+
+```{r sobrecargo}
+ggplot(data_raw) + geom_density(aes(sobrecargo, group = estado, fill = estado, alpha = I(0.5)))
+```
+
+Esta variable logra dividir los clientes en dos grupos casi perfectamente. Presenta bastante poder predictivo, pues segrega bien entre estados.
+
+## Saldo restante
+
+```{r saldo_restante}
+ggplot(data_raw) + geom_density(aes(saldo_restante, group = estado, fill = estado, alpha = I(0.5)))
+```
+
+Esta variable logra dividir los clientes en dos grupos.
+
+## Satisfaccion
+
+```{r satisfaccion}
+ggplot(data_raw) + geom_density(aes(satisfaccion, group = estado, fill = estado, alpha = I(0.5)))
+```
+
+Esta variable logra dividir los clientes en dos grupos casi perfectamente. Presenta bastante poder predictivo, pues segrega bien entre estados.
+
+# Pregunta 1.2 - Eliminacion de outliers
+
+Se procede a eliminar observaciones con cualquiera de sus predictores por fuera de 4 desviaciones estabdar.
+
+```{r outliers}
+are_outliers <- function(dt) {
+  mean_data <- mean(dt)
+  sd_data <- sd(dt)
+
+  are_outliers <- abs((dt - mean_data) / sd_data) >= 4
+
+  return(are_outliers)
+}
+
+data <- data_raw %>%
+  filter_at(vars(-matches("estado")), all_vars(!are_outliers(.)))
+
+nrow(data_raw) - nrow(data)
+```
+
+Solo se eliminan 4 observaciones.
+
+# Pregunta 1.3 - Correlacion entre variables
+
+Se procede a analizar la correlacion entre los predictores.
+
+```{r correlation, cache=TRUE}
+featurePlot(
+  x = data[, colnames(data) != "estado"],
+  y = data$estado,
+  plot = "pairs",
+  auto.key = list(columns = 2)
+)
+```
+
+Las variables no parecen estar (en parejas) correlacionadas de forma que permita discriminar (de manera significativa) entre clientes retirados y vinculados. Sin embargo, las variables `sobrecargo` y `satisfaccion` si parecen presentar una discriminacion mas alta como se observo anteriormente en el analisis univariado.
+
+Desde el punto de vista de PCA esto podria indicar de que en los componentes principales obtenidos, la mayoria de la variacion va a ser explicada por `sobrecargo` y `satisfaccion`. Es posible que no sean necesarios muchos componentes principales debido a que las variables anteriormente mencionadas explican la variacion entre clientes con estado `RETIRADO` y `VINCULADO` bastante bien (teniendo en cuenta que esta variacion es la mas importante, pues el problema se trata de predecir).
+
+# Pregunta 1.4 - Modelos predictivos
+
+Se procede a escoger un protocolo de evaluacion, metricas de calidad de la prediccion y un modelo predictivo.
+
+## a - Protocolo de evaluacion
+
+Debido a que la cantidad de datos no es mucha --solo son 8 predictores y 23158 observaciones-- se escoge 10-Fold cross-validation, con el proposito de:
+
+* Entrenar los modelos con **todos** los datos
+* Reducir la varianza de la estimacion del error de clasificacion de test, permitiendo escoger con mas certeza el modelo y parametros correctos
+* Permitir una computacion del error de test que se computacionalmente viable (en LOOCV se tendrian que entrenar mas de 23 mil modelos para cada parametro posible de todos los modelos)
+
+## b - Metricas
+
+Debido a que predecir los clientes con mayor probabilidad de irse es lo mas importante para este problema, se usara el **accuracy** como metrica para escoger un modelo durante el training. Es posible utilizar el accuracy y no el Kappa, debido a que las clases objetivo estan balanceadas y el baseline es del 50.36%. Adicional a esto, con el test set se tendra en cuenta el **recall** para escoger el modelo final, esto es debido a que lo mas importante es maximizar el porcentaje de personas que en realidad se fueron y fueron predichas correctamente.
+
+## c - Modelos
+
+Para entrenar los modelos, se dividen los datos en training y test sets, con el proposito de tener datos con los cuales evaluar el modelo que no hayan sido parte del entrenamiento. De esta manera, se evitan los efectos del data leakage y se puede escoger el modelo despues de haber escogido varios en training.
+
+```{r training_test}
+set.seed(1)
+data_training_index <- createDataPartition(data$estado, p = 0.8, list = FALSE, times = 1)
+
+data_training <- data[data_training_index, ]
+data_test <- data[-data_training_index, ]
+
+nrow(data_training)
+nrow(data_test)
+```
+
+Resultan dos datasets, el de entrenamiento con 18528 observaciones y el de test con 4630.
+
+Adicionalmente, se habilita la computacion paralela, para optimizar el tiempo de ejecucion del training de los modelos.
+
+```{r parallel}
+cl <- makePSOCKcluster(12)
+
+registerDoParallel(cl)
+```
+
+### KNN
+
+Se procede a entrenar un modelo con KNN, probando un valor de K entre 1 y 500, este limite maximo ha sido escogido debido a que para mas de 500 existen muchos empates y no es posible entrenar.
+
+```{r knn, cache = TRUE}
+seed <- rep(1, 500)
+knn_seeds <- list(seed, seed, seed, seed, seed, seed, seed, seed, seed, seed, 1)
+
+model_knn <- train(estado ~ ., data_training,
+  method = "knn",
+  trControl = trainControl(method = "repeatedcv", repeats = 1, number = 10, seeds = knn_seeds),
+  tuneGrid = expand.grid(k = 1:500),
+  preProcess = c("center", "scale")
+)
+```
+
+Se grafica el resultado del accuracy y Kappa.
+
+```{r knn_result}
+ggplot(model_knn$results) +
+  geom_line(aes(x = k, y = Accuracy, color = "Accuracy")) +
+  geom_line(aes(x = k, y = Kappa, color = "Kappa"))
+
+model_knn$results[which.max(model_knn$results$Accuracy), ]
+model_knn$results[which.max(model_knn$results$Kappa), ]
+```
+
+Se puede observar que ambos errores decrecen rapidamente hasta k = 15, donde luego el error se estabiliza. Se selecciona un valor de K de 15, pues es el parametro que maximiza el Kappa y accuracy simultaneamente, teniendo menor probabilidad de overfitting que un K grande.
+
+### Arbol de decision 
+
+Se procede a entrenar un modelo de arbol de decision con el parametro de complejidad tomando valores entre 0 y 1, con pasos de 0.001.
+
+```{r tree, cache = TRUE}
+seed <- c(1)
+tree_seeds <- list(seed, seed, seed, seed, seed, seed, seed, seed, seed, seed, 1)
+
+model_tree <- train(estado ~ ., data_training,
+  method = "rpart",
+  trControl = trainControl(method = "repeatedcv", repeats = 1, number = 10, seeds = tree_seeds),
+  tuneGrid = expand.grid(cp = seq(0, 1, 0.001))
+)
+```
+
+Se grafica el resultado del accuracy y Kappa.
+
+```{r tree_result}
+ggplot(model_tree$results) +
+  geom_line(aes(x = -cp, y = Accuracy, color = "Accuracy")) +
+  geom_line(aes(x = -cp, y = Kappa, color = "Kappa"))
+
+model_tree$bestTune$cp
+```
+
+Para este modelo, un cp de 0.807 se maximiza el accuracy y kappa, se elige finalmente un cp de 0.8, pues si bien existen parametros de complejidad mas bajos que logran el mismo accuracy y Kappa, este valor mas alto tendra menos probabilidad de overfitting.
+
+### Regresion logistica
+
+Se procede a entrenar un modelo de regresion logistica stepwise con AIC.
+
+```{r reg, cache = TRUE}
+seed <- c(1)
+reg_seeds <- list(seed, seed, seed, seed, seed, seed, seed, seed, seed, seed, 1)
+
+model_reg <- train(estado ~ ., data_training,
+  method = "glmStepAIC",
+  trControl = trainControl(method = "repeatedcv", repeats = 1, number = 10, verboseIter = TRUE, seeds = reg_seeds),
+  preProcess = c("center", "scale")
+)
+```
+
+Se para el cluster de ejecucion paralela.
+
+```{r cluster_stop}
+stopCluster(cl)
+```
+
+Se grafica el resultado del accuracy y Kappa.
+
+```{r reg_result}
+model_reg$results
+```
+
+El resultado de esta regresion resulta en un modelo con las variables `sobrecargo` y `satisfaccion`, que fueron las dos variables identificadas anteriormente como las de mayor poder predictivo.

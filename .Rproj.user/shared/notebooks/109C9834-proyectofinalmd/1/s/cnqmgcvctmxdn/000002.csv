@@ -1,0 +1,4 @@
+"0","logReg1 <- glm(target ~ ., data=data, family=""binomial"")
+"
+"2","Error: no se puede ubicar un vector de tamaño  4.6 Gb
+"
