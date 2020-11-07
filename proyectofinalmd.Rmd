@@ -11,8 +11,11 @@ library(ggplot2)
 library(class)
 library(ggthemes)
 library(gridExtra)
-#library(remotes)
-#install_version("ElemStatLearn")
+library(featurePlot)
+library(ellipse)
+library(caret)
+library(remotes)
+install_version("featureplot")
 ```
 
 ## Clasificación pago TC
@@ -86,4 +89,24 @@ for (catvar in numericVars){
 logReg1 <- glm(target ~ ., data=data, family="binomial")
 ```
 
+
+```{r revisando atipicos var categoricas}
+vars = colnames(data)
+numericVars = vars[sapply(data[,vars], class) %in% c('numeric','integer')]
+categoricalVars = setdiff(colnames(data), numericVars)
+for (catvar in categoricalVars){
+print(catvar)  
+ print(table(data$catvar))
+}
+
+```
+
+```{r}
+featurePlot(
+  x = data[, colnames(data) != "target"],
+  y = data$estado,
+  plot = "pairs",
+  auto.key = list(columns = 2)
+)
+```
 
